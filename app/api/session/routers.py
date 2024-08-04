@@ -20,10 +20,13 @@ async def websocket_endpoint(
         session_name,
         session_password
     )
+    await manager.send_player_id(session_id, player_id)
+    await manager.send_enemies_id(session_id)
 
     try:
         while True:
             data = await websocket.receive_text()
             message = json.loads(data)
+            await manager.send_message_to_enemy(session_id, player_id, message)
     except WebSocketDisconnect:
         await manager.disconnect(session_id, player_id)
