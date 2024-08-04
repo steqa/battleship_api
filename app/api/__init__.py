@@ -1,1 +1,1 @@
-# from api.module.models import Model  # noqa
+from api.session.models import session # noqa

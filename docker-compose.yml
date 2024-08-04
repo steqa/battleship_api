@@ -14,7 +14,7 @@ services:
       - ${API_PORT}:8000
     volumes:
       - ./app/api:/app/api
-      - ./app/alembic:/app/alembic
+      - ./app/migrations:/app/migrations
       - ./app/alembic.ini:/app/alembic.ini
     env_file:
       - .env
