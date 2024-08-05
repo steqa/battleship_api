@@ -1,4 +1,6 @@
 from fastapi import FastAPI
+
+from api.common import configure_logging
 from api.session.routers import router as session_router
 
 app = FastAPI(
@@ -8,3 +10,5 @@ app = FastAPI(
 )
 
 app.include_router(session_router)
+
+configure_logging(level=20)
