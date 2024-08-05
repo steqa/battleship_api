@@ -18,6 +18,7 @@ services:
       - ./app/alembic.ini:/app/alembic.ini
     env_file:
       - .env
+    command: ["/usr/local/bin/entrypoint.sh"]
 
   db:
     container_name: db
