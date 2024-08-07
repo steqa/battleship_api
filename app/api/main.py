@@ -11,4 +11,4 @@ app = FastAPI(
 
 app.include_router(session_router)
 
-configure_logging(level=20)
+configure_logging(level=10)
