@@ -48,9 +48,6 @@ async def create_session(session_request: SessionCreate):
         name=session_request.name,
         password=session_request.password
     )
-    await manager.send_player_id(session_id, player_id)
-    if await manager.session_is_ready(session_id):
-        await manager.send_enemies_id(session_id)
     logger.debug('Session created in database, session_id: %s', session.id)
     player = await services.create_player(session.id)
     logger.debug('Player created in database, session_id: %s', session.id)
