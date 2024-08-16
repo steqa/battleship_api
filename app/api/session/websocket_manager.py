@@ -1,132 +1,101 @@
-import json
 import logging
-from dataclasses import dataclass
-from uuid import uuid4, UUID
+from uuid import UUID
 
 from fastapi import WebSocket
+from starlette.websockets import WebSocketState
 
 from api.session import services
-from api.session.exceptions import PlayerNotFound, SessionAlreadyFull
-from api.session.websocket_messages import (
-    player_id_message,
-    enemy_id_message,
-    enemy_left_message,
-    game_is_ready
+from api.session.exceptions import (
+    WsPlayerNotFound
 )
+from api.session.models import player
+from api.session.websocket_messages import (
+    start_game_message,
+    enemy_left_message,
+    enemy_joined_message
+)
+from api.session.websocket_utils import ws_receive_player_start_game_message
 
 logger = logging.getLogger(__name__)
 
 
-@dataclass
 class Player:
-    uuid: UUID
-    websocket: WebSocket
+    __slots__ = ('websocket', 'enemy_joined')
+
+    def __init__(self, websocket: WebSocket) -> None:
+        self.websocket = websocket
+        self.enemy_joined = False
 
 
 class ConnectionManager:
     def __init__(self):
-        self.active_connections: dict[UUID, list[Player]] = {}
+        self.active_connections: dict[UUID, Player] = {}
 
-    async def connect(self, websocket: WebSocket, name: str, password: str) -> [UUID, UUID]:
-        logger.debug('Connect to session: %s', name)
-        session = await services.get_session(name=name, password=password)
-
-        if session is not None and session.player2_id is not None:
-            logger.warning('Session already full!')
-            raise SessionAlreadyFull
-
+    async def connect(self, websocket: WebSocket, player_id: UUID):
         await websocket.accept()
-        logger.debug('WebSocket connected.')
+        self.active_connections[player_id] = Player(websocket)
+        logger.debug('Websocket connected, player_id: %s', player_id)
 
-        new_player = Player(uuid=uuid4(), websocket=websocket)
-        if session is None:
-            session = await services.create_session(name, password, new_player.uuid)
-            logger.info('Session created in database with player1_id: %s', new_player.uuid)
-        else:
-            session = await services.update_session(session.id, new_player2_id=new_player.uuid)
-            logger.info('Session updated in database with player2_id: %s', new_player.uuid)
+    async def disconnect(self, player_id: UUID):
+        connection = self.active_connections.pop(player_id, None)
+        if connection:
+            if connection.websocket.client_state != WebSocketState.DISCONNECTED:
+                await connection.websocket.close()
+            logger.debug('Websocket disconnected, player_id: %s', player_id)
 
-        self.active_connections.setdefault(session.id, []).append(new_player)
-        logger.debug('Session connected, session_id: %s, player_id: %s', session.id, new_player.uuid)
-        return session.id, new_player.uuid
-
-    async def disconnect(self, session_id: UUID, player_id: UUID):
-        connections = self.active_connections
-        if session_id in connections:
-            session = connections[session_id]
-            player = await self.__get_player(session_id, player_id)
-            if player is not None:
-                session.remove(player)
-                logger.info('Player disconnected from session, player_id: %s, session_id: %s', player_id, session_id)
-
-            enemy = await self.__get_enemy(session_id, player_id)
-            if enemy is None:
-                logger.debug('Session is empty.')
-                await self.delete_connections(session_id)
-                await services.delete_session(uuid=session_id)
-                logger.info('Session deleted from database.')
+    async def login_session(
+            self, websocket: WebSocket,
+            player_id: UUID,
+            session_id: UUID
+    ) -> player:
+        enemy = await services.get_enemy(player_id, session_id)
+        while True:
+            if enemy is not None and enemy.id in self.active_connections:
+                await self.send_enemy_joined_message(to_id=player_id)
+                await self.send_enemy_joined_message(to_id=enemy.id)
+                self.update_enemy_joined(player_id, True)
+                self.update_enemy_joined(enemy.id, True)
+                await ws_receive_player_start_game_message(websocket)
+                await self.send_start_game_message(to_id=player_id)
+                logger.debug('Session start, player_id: %s', player_id)
+                return enemy
             else:
-                message = enemy_left_message()
-                await self.__send_message(enemy, message)
-                logger.debug("Player's exit message sent to enemy.")
+                await ws_receive_player_start_game_message(websocket)
+                if self.enemy_joined(player_id):
+                    enemy = await services.get_enemy(player_id, session_id)
+                    await self.send_start_game_message(to_id=player_id)
+                    logger.debug('Session start, player_id: %s', player_id)
+                    return enemy
 
-    async def delete_connections(self, session_id: UUID) -> None:
-        if session_id in self.active_connections:
-            del self.active_connections[session_id]
+    def enemy_joined(self, player_id: UUID) -> bool:
+        if player_id in self.active_connections:
+            return self.active_connections[player_id].enemy_joined
+        else:
+            return False
 
-    async def send_player_id(self, session_id, player_id) -> None:
-        message = player_id_message(player_id)
-        await self.send_message_to_player(session_id, player_id, message)
-        logger.debug('Player ID sent.')
+    def update_enemy_joined(self, player_id: UUID, status: bool) -> None:
+        if player_id in self.active_connections:
+            self.active_connections[player_id].enemy_joined = status
 
-    async def send_enemies_id(self, session_id: UUID) -> None:
-        players = self.active_connections[session_id]
-        for player in players:
-            enemy = await self.__get_enemy(session_id, player.uuid)
-            message = enemy_id_message(enemy.uuid)
-            await manager.__send_message(player, message)
-            logger.debug("Enemies ID's sent.")
+    async def send_enemy_joined_message(self, to_id: UUID) -> None:
+        await self.__send_message(to_id, enemy_joined_message())
 
-    async def send_game_is_ready(self, session_id: UUID) -> None:
-        players = self.active_connections[session_id]
-        for player in players:
-            await manager.__send_message(player, game_is_ready())
+    async def send_enemy_left_message(self, to_id: UUID) -> None:
+        await self.__send_message(to_id, enemy_left_message())
 
-    async def send_message_to_player(self, session_id: UUID, player_id: UUID, message: dict):
-        player = await self.__get_player(session_id, player_id)
-        await self.__send_message(player, message)
+    async def send_start_game_message(self, to_id: UUID) -> None:
+        await self.__send_message(to_id, start_game_message())
 
-    async def send_message_to_enemy(self, session_id: UUID, player_id: UUID, message: dict):
-        enemy = await self.__get_enemy(session_id, player_id)
-        await self.__send_message(enemy, message)
-
-    async def session_is_ready(self, session_id: UUID) -> bool:
-        connections = self.active_connections
-        if (session_id in connections) and (len(connections[session_id]) == 2):
-            return True
-        return False
-
-    async def __get_player(self, session_id: UUID, player_id: UUID) -> Player | None:
-        players = self.active_connections[session_id]
-        for player in players:
-            if player.uuid == player_id:
-                return player
-        return None
-
-    async def __get_enemy(self, session_id: UUID, player_id: UUID) -> Player | None:
-        players = self.active_connections[session_id]
-        for player in players:
-            if player.uuid != player_id:
-                return player
-        return None
-
-    @staticmethod
-    async def __send_message(player: Player, message: dict) -> None:
-        if player is None:
-            logger.warning('Player for message not found!')
-            raise PlayerNotFound
-        await player.websocket.send_text(json.dumps(message))
-        logger.debug('Message sent to player, player_id: %s, message: %s', player.uuid, message)
+    async def __send_message(self, player_id: UUID, message: dict) -> None:
+        if player_id not in self.active_connections:
+            logger.warning('Player for message not found, player_id: %s', player_id)
+            raise WsPlayerNotFound
+        connection = self.active_connections[player_id].websocket
+        if connection.client_state == WebSocketState.CONNECTED:
+            await connection.send_json(message)
+            logger.debug('Message sent to player, player_id: %s, message: %s', player_id, message)
+        else:
+            logger.warning('Cannot send message to disconnected websocket, player_id: %s', player_id)
 
 
 manager = ConnectionManager()

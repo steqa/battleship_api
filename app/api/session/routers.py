@@ -1,14 +1,26 @@
-import json
 import logging
+from uuid import UUID
 
 from fastapi import APIRouter
 from fastapi import WebSocket
 from starlette.websockets import WebSocketDisconnect
 
-from api.session import services, redis_services
-from api.session.exceptions import JSONDecodeException
-from api.session.response_types import ResponseType
-from api.session.schemas import ResponseModel, ReadyResponse
+from api.session import services
+from api.session.exceptions import (
+    WsPlayerNotFound,
+    WsSessionNotFound,
+    HttpSessionNotFound,
+    HttpInvalidPassword,
+    HttpSessionAlreadyExists,
+    HttpSessionAlreadyFull
+)
+from api.session.schemas import (
+    SessionCreate,
+    PlayerIDResponse,
+    Session,
+    SessionLogin,
+)
+from api.session.utils import validate_password
 from api.session.websocket_manager import manager
 
 logger = logging.getLogger(__name__)
@@ -19,55 +31,82 @@ router = APIRouter(
 )
 
 
-@router.websocket('/ws/{session_name}/{session_password}')
-async def websocket_endpoint(
-        websocket: WebSocket,
-        session_name: str,
-        session_password: str
-):
-    session_id, player_id = await manager.connect(
-        websocket,
-        session_name,
-        session_password
+@router.get('', response_model=list[Session])
+async def get_sessions():
+    sessions = await services.get_sessions(desc_sort=True)
+    return sessions
+
+
+@router.post('/create', response_model=PlayerIDResponse)
+async def create_session(session_request: SessionCreate):
+    session = await services.get_session(name=session_request.name)
+    if session is not None:
+        logger.warning('Session already exists, session_name: %s', session_request.name)
+        raise HttpSessionAlreadyExists
+
+    session = await services.create_session(
+        name=session_request.name,
+        password=session_request.password
     )
     await manager.send_player_id(session_id, player_id)
     if await manager.session_is_ready(session_id):
         await manager.send_enemies_id(session_id)
+    logger.debug('Session created in database, session_id: %s', session.id)
+    player = await services.create_player(session.id)
+    logger.debug('Player created in database, session_id: %s', session.id)
+    return PlayerIDResponse(player_id=player.id)
+
+
+@router.post('/login')
+async def login_session(session_request: SessionLogin):
+    session = await services.get_session(name=session_request.name)
+    if session is None:
+        logger.warning('Session not found in database, session_name: %s', session_request.name)
+        raise HttpSessionNotFound
+
+    if session.is_ready:
+        raise HttpSessionAlreadyFull
+
+    correct_password = session.password
+    if not validate_password(session_request.password, correct_password):
+        logger.info('Session login failed, session_id: %s', session.id)
+        raise HttpInvalidPassword
+
+    player = await services.create_player(session.id)
+    logger.debug('Player created in database, session_id: %s', session.id)
+
+    if not session.is_ready:
+        await services.update_session(session.id, is_ready=True)
+        logger.debug('Session updated (is_ready=True) in database, session_id: %s', session.id)
+    return PlayerIDResponse(player_id=player.id)
+
+
+@router.websocket('/ws')
+async def websocket_connect_player(websocket: WebSocket, player_id: UUID):
+    player = await services.get_player(player_id)
+    if player is None:
+        logger.warning('Player not found in database, player_id: %s', player_id)
+        raise WsPlayerNotFound
+
+    session = await services.get_session(player.session_id)
+    if session is None:
+        logger.warning('Session not found in database, player_id: %s', player_id)
+        raise WsSessionNotFound
+
+    await manager.connect(websocket, player_id)
 
     try:
-        while True:
-            data = await websocket.receive_text()
-            logger.debug('Received data:\n%s', data)
-            try:
-                message = json.loads(data)
-                response = ResponseModel(**message)
-            except json.decoder.JSONDecodeError:
-                logger.warning('Data is invalid JSON!')
-                await manager.disconnect(session_id, player_id)
-                raise JSONDecodeException
+        enemy = await manager.login_session(websocket, player_id, session.id)
 
-            if response.type == ResponseType.ready.value:
-                logger.debug('Player ready, player_id: %s', player_id)
-                detail = ReadyResponse(**response.detail)
-                await redis_services.set_player_data(
-                    session_id, player_id, detail.board, detail.entities
-                )
-                logger.info('Player data added to redis, session_id: %s, player1_id: %s', session_id, player_id)
-                session = await services.get_session(uuid=session_id)
-                if session and session.player1_id == player_id:
-                    session = await services.update_session(session_id, new_player1_ready=True)
-                elif session.player2_id == player_id:
-                    session = await services.update_session(session_id, new_player2_ready=True)
-
-                if session.player1_ready and session.player2_ready:
-                    await manager.send_game_is_ready(session_id)
-                    logger.debug('Game ready, session_id: %s', session_id)
     except WebSocketDisconnect:
-        await manager.disconnect(session_id, player_id)
-    except:
-        await services.delete_session(session_id)
-        logger.info('Session deleted from database.')
-        await manager.delete_connections(session_id)
-        logger.debug('Connections cleared.')
-        await redis_services.delete_session(session_id)
-        logger.info('Session deleted from redis.')
+        await manager.disconnect(player.id)
+        enemy = await services.get_enemy(player_id=player.id, session_id=session.id)
+        await services.delete_player(player.id)
+        logger.debug('Player deleted from database, player_id: %s', player.id)
+        if enemy is not None:
+            if enemy.id in manager.active_connections:
+                await manager.send_enemy_left_message(enemy.id)
+                await manager.disconnect(enemy.id)
+        else:
+            await services.delete_session(session.id)
+            logger.debug('Session deleted from database, player_id: %s', player.id)

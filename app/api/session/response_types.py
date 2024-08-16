@@ -1,5 +1,5 @@
 from enum import StrEnum
 
 
-class ResponseType(StrEnum):
-    ready = 'ready'
+class WsMessageType(StrEnum):
+    player_start_game = 'PlayerStartGame'
