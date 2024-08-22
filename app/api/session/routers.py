@@ -5,6 +5,7 @@ from fastapi import APIRouter
 from fastapi import WebSocket
 from starlette.websockets import WebSocketDisconnect
 
+from api.session import redis_services
 from api.session import services
 from api.session.exceptions import (
     WsPlayerNotFound,
@@ -19,9 +20,13 @@ from api.session.schemas import (
     PlayerIDResponse,
     Session,
     SessionLogin,
+    Entities
 )
 from api.session.utils import validate_password
 from api.session.websocket_manager import manager
+from api.session.websocket_utils import (
+    ws_receive_player_placement_ready_message
+)
 
 logger = logging.getLogger(__name__)
 
@@ -91,9 +96,16 @@ async def websocket_connect_player(websocket: WebSocket, player_id: UUID):
         raise WsSessionNotFound
 
     await manager.connect(websocket, player_id)
-
     try:
         enemy = await manager.login_session(websocket, player_id, session.id)
+        while True:
+            placement = await ws_receive_player_placement_ready_message(websocket)
+            await manager.start_game(websocket, player_id, enemy.id)
+            await redis_services.set_player_data(
+                session.id, player_id, placement.board, placement.entities
+            )
+            logger.info('Player placement added to redis, session_id: %s, player_id: %s', session.id, player_id)
+            await manager.send_player_entities_message(enemy.id, Entities(entities=placement.entities))
 
     except WebSocketDisconnect:
         await manager.disconnect(player.id)
@@ -107,3 +119,5 @@ async def websocket_connect_player(websocket: WebSocket, player_id: UUID):
         else:
             await services.delete_session(session.id)
             logger.debug('Session deleted from database, player_id: %s', player.id)
+            await redis_services.delete_session(session.id)
+            logger.debug('Session deleted from redis, player_id: %s', player.id)

@@ -2,7 +2,10 @@ from uuid import UUID
 
 import redis.asyncio as redis
 
+from api.config import settings
 from api.session.schemas import EntityData
+
+REDIS_URL = f'redis://redis:{settings.REDIS_PORT}'
 
 
 async def set_player_data(
@@ -11,7 +14,7 @@ async def set_player_data(
         board: str,
         entities: dict[UUID, EntityData]
 ) -> None:
-    client = redis.from_url('redis://redis:6379')
+    client = redis.from_url(REDIS_URL)
 
     await client.hset(
         f'session:{session_id}',
@@ -44,8 +47,7 @@ async def set_player_data(
     await client.close()
 
 
-async def delete_session(uuid: UUID) -> None:
-    client = redis.from_url('redis://redis:6379')
-    if client.hexists(f'session:{uuid}'):
-        client.hdel(f'session:{uuid}')
+async def delete_session(session_id: UUID) -> None:
+    client = redis.from_url(REDIS_URL)
+    await client.delete(f'session:{session_id}')
     await client.close()

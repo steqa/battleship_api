@@ -15,6 +15,8 @@ class Settings:
     POSTGRES_PORT = os.getenv("POSTGRES_PORT")
     POSTGRES_DB = os.getenv("POSTGRES_DB")
 
+    REDIS_PORT = 6379
+
     LOGGING_LEVEL = int(os.getenv("LOGGING_LEVEL"))
 
 

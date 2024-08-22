@@ -44,14 +44,24 @@ class WsMessageModel(BaseModel):
     detail: dict
 
 
-class EntityData(BaseModel):
-    size: int
+class EntityCells(BaseModel):
     cells: list[int]
+
+
+class EntityData(EntityCells):
+    size: int
 
 
 class Entities(BaseModel):
     entities: dict[UUID, EntityData]
 
+    def to_dict(self):
+        return {
+            'entities': {
+                str(uuid): entity.model_dump() for uuid, entity in self.entities.items()
+            }
+        }
 
-class ReadyResponse(Entities):
+
+class PlayerPlacement(Entities):
     board: str
