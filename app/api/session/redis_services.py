@@ -40,6 +40,11 @@ async def set_player_data(
         )
         await client.hset(
             f'session:{session_id}',
+            f'player:{player_id}:entity:{entity_id}:direction',
+            entity_data.direction
+        )
+        await client.hset(
+            f'session:{session_id}',
             f'player:{player_id}:entity:{entity_id}:cells',
             ' '.join(str(cell) for cell in entity_data.cells)
         )

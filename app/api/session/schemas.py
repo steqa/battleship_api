@@ -50,6 +50,7 @@ class EntityCells(BaseModel):
 
 class EntityData(EntityCells):
     size: int
+    direction: int
 
 
 class Entities(BaseModel):
