@@ -38,7 +38,7 @@ router = APIRouter(
 
 @router.get('', response_model=list[Session])
 async def get_sessions():
-    sessions = await services.get_sessions(desc_sort=True)
+    sessions = await services.get_sessions(is_ready=False, desc_sort=True)
     return sessions
 
 
@@ -55,7 +55,7 @@ async def create_session(session_request: SessionCreate):
     )
     logger.debug('Session created in database, session_id: %s', session.id)
     player = await services.create_player(session.id)
-    logger.debug('Player created in database, session_id: %s', session.id)
+    logger.debug('Player created in database, session_id: %s', player.id)
     return PlayerIDResponse(player_id=player.id)
 
 
@@ -75,7 +75,7 @@ async def login_session(session_request: SessionLogin):
         raise HttpInvalidPassword
 
     player = await services.create_player(session.id)
-    logger.debug('Player created in database, session_id: %s', session.id)
+    logger.debug('Player created in database, player_id: %s', player.id)
 
     if not session.is_ready:
         await services.update_session(session.id, is_ready=True)
@@ -97,27 +97,34 @@ async def websocket_connect_player(websocket: WebSocket, player_id: UUID):
 
     await manager.connect(websocket, player_id)
     try:
-        enemy = await manager.login_session(websocket, player_id, session.id)
+        await manager.login_session(websocket, session_id=session.id, player_id=player.id)
+        enemy = await services.get_enemy(player_id, session.id)
         while True:
             placement = await ws_receive_player_placement_ready_message(websocket)
-            await manager.start_game(websocket, player_id, enemy.id)
-            await redis_services.set_player_data(
-                session.id, player_id, placement.board, placement.entities
-            )
-            logger.info('Player placement added to redis, session_id: %s, player_id: %s', session.id, player_id)
-            await manager.send_player_entities_message(enemy.id, Entities(entities=placement.entities))
+            start = await manager.start_game(websocket, player_id, enemy.id)
+            if start:
+                break
+        await redis_services.set_player_data(
+            session.id, player_id, placement.board, placement.entities
+        )
+        logger.info('Player placement added to redis, session_id: %s, player_id: %s', session.id, player_id)
+        await manager.send_player_entities_message(enemy.id, Entities(entities=placement.entities))
+        while True:
+            await manager.handle_hit(websocket, session.id, player_id, enemy.id)
 
     except WebSocketDisconnect:
         await manager.disconnect(player.id)
-        enemy = await services.get_enemy(player_id=player.id, session_id=session.id)
+
         await services.delete_player(player.id)
         logger.debug('Player deleted from database, player_id: %s', player.id)
+
+        enemy = await services.get_enemy(player_id=player.id, session_id=session.id)
         if enemy is not None:
-            if enemy.id in manager.active_connections:
-                await manager.send_enemy_left_message(enemy.id)
-                await manager.disconnect(enemy.id)
+            await manager.send_enemy_left_message(to_id=enemy.id)
         else:
-            await services.delete_session(session.id)
-            logger.debug('Session deleted from database, player_id: %s', player.id)
-            await redis_services.delete_session(session.id)
-            logger.debug('Session deleted from redis, player_id: %s', player.id)
+            session = await services.get_session(uuid=player.session_id)
+            if session is not None:
+                await services.delete_session(session.id)
+                logger.debug('Session deleted from database, session_id: %s', session.id)
+                await redis_services.delete_session(session.id)
+                logger.debug('Session deleted from redis, session_id: %s', session.id)

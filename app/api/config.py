@@ -19,5 +19,8 @@ class Settings:
 
     LOGGING_LEVEL = int(os.getenv("LOGGING_LEVEL"))
 
+    GRID_SIZE_X = int(os.getenv("GRID_SIZE_X"))
+    GRID_SIZE_Y = int(os.getenv("GRID_SIZE_Y"))
+
 
 settings = Settings()

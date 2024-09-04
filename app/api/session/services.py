@@ -19,17 +19,22 @@ async def create_session(name: str, password: str) -> session:
     return await execute_query(query, commit=True)
 
 
-async def get_sessions(desc_sort: bool = False) -> session:
+async def get_sessions(
+        is_ready: bool | None = None,
+        desc_sort: bool = False
+) -> session:
     query = select(session)
+    if is_ready is not None:
+        query = query.where(session.c.is_ready == is_ready)
     if desc_sort is True:
         query = query.order_by(desc(session.c.created_at))
     return await execute_query(query, first_only=False)
 
 
 async def get_session(
-        uuid: UUID = None,
-        name: str = None,
-        password: str = None
+        uuid: UUID | None = None,
+        name: str | None = None,
+        password: str | None = None
 ) -> session:
     query = select(session)
     if uuid is not None:
@@ -43,9 +48,9 @@ async def get_session(
 
 async def update_session(
         uuid: UUID,
-        name: str = None,
-        password: str = None,
-        is_ready: bool = None
+        name: str | None = None,
+        password: str | None = None,
+        is_ready: bool | None = None
 ) -> session:
     query = update(session).where(session.c.id == uuid)
     values = {}
@@ -78,7 +83,7 @@ async def get_player(uuid: UUID) -> player:
 
 async def update_player(
         uuid: UUID,
-        session_id: UUID = None,
+        session_id: UUID | None = None,
 ) -> player:
     query = update(player).where(player.c.id == uuid)
     values = {}

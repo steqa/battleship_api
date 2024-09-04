@@ -6,7 +6,8 @@ from fastapi import WebSocket
 
 from api.session.schemas import (
     WsMessageModel,
-    PlayerPlacement
+    PlayerPlacement,
+    Hit
 )
 from api.session.websocket_response_types import WsResponseType
 
@@ -25,6 +26,18 @@ async def ws_receive_player_placement_ready_message(websocket: WebSocket) -> Pla
             return detail
         except pydantic.ValidationError:
             logger.warning('Invalid player placement message format!')
+
+
+async def ws_receive_player_hit_message(websocket: WebSocket) -> Hit:
+    while True:
+        message = await ws_receive_message_by_type(websocket, WsResponseType.HIT)
+        try:
+            detail = Hit(**message)
+            if detail.cell < 0 or detail.cell > 99:
+                raise pydantic.ValidationError
+            return detail
+        except pydantic.ValidationError:
+            logger.warning('Invalid player hit message format!')
 
 
 async def ws_receive_message_by_type(

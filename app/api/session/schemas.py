@@ -1,6 +1,7 @@
+from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, field_validator
+from pydantic import field_validator
 
 from api.schemas import BaseSchema
 from api.session.exceptions import (
@@ -39,12 +40,12 @@ class PlayerIDResponse(BaseSchema):
     player_id: UUID
 
 
-class WsMessageModel(BaseModel):
+class WsMessageModel(BaseSchema):
     type: str
     detail: dict
 
 
-class EntityCells(BaseModel):
+class EntityCells(BaseSchema):
     cells: list[int]
 
 
@@ -53,7 +54,7 @@ class EntityData(EntityCells):
     direction: int
 
 
-class Entities(BaseModel):
+class Entities(BaseSchema):
     entities: dict[UUID, EntityData]
 
     def to_dict(self):
@@ -66,3 +67,12 @@ class Entities(BaseModel):
 
 class PlayerPlacement(Entities):
     board: str
+
+
+class Hit(BaseSchema):
+    cell: int
+    entity_id: str
+
+
+class HitResponse(Hit):
+    status: Literal['hit', 'miss', 'destroy']
