@@ -73,12 +73,10 @@ class ConnectionManager:
 
             await ws_receive_player_start_session_message(websocket)
             await self.send_start_session_message(to_id=player_id)
-            logger.debug('Session start, player_id: %s', player_id)
         else:
             await ws_receive_player_start_session_message(websocket)
             if self.active_connections[player_id].enemy_joined:
                 await self.send_start_session_message(to_id=player_id)
-                logger.debug('Session start, player_id: %s', player_id)
 
     async def start_game(
             self,
@@ -95,13 +93,16 @@ class ConnectionManager:
             turn = random.choice([True, False])
             self.active_connections[player_id].turn = turn
             self.active_connections[enemy_id].turn = not turn
+            if turn is True:
+                await self.send_your_turn_message(to_id=player_id)
+            else:
+                await self.send_your_turn_message(to_id=enemy_id)
 
         while True:
             message = await ws_receive_message(websocket)
             enemy_is_ready = self.active_connections[enemy_id].is_ready
             if message.type == WsResponseType.PLAYER_START_GAME and enemy_is_ready:
                 await self.send_start_game_message(to_id=player_id)
-                logger.debug('Game start, player_id: %s', player_id)
                 return True
             elif message.type == WsResponseType.PLAYER_PLACEMENT_NOT_READY and not enemy_is_ready:
                 logger.debug('Player is not ready, player_id: %s', player_id)
@@ -115,13 +116,11 @@ class ConnectionManager:
             player_id: UUID,
             enemy_id: UUID
     ) -> None:
-        if self.active_connections[player_id].turn is True:
-            await self.send_your_turn_message(to_id=player_id)
-            logger.debug('Turn, player_id: %s', player_id)
-
         message = await ws_receive_player_hit_message(websocket)
+
         if self.active_connections[player_id].turn is False:
             return
+
         response_data = {
             'player_id': player_id,
             'enemy_id': enemy_id,
@@ -132,6 +131,9 @@ class ConnectionManager:
         hits = await add_player_hits(session_id, enemy_id, message.cell)
         if board[message.cell] == '0':
             await self.send_hit_response_to_players(**response_data, status='miss')
+            self.active_connections[player_id].turn = not self.active_connections[player_id].turn
+            self.active_connections[enemy_id].turn = not self.active_connections[player_id].turn
+            await self.send_your_turn_message(to_id=enemy_id)
         else:
             if check_full_board_in_hits(board, hits):
                 await self.send_hit_response_to_players(**response_data, status='destroy')
@@ -154,10 +156,7 @@ class ConnectionManager:
                 else:
                     await self.send_hit_response_to_players(**response_data, status='hit')
 
-        self.active_connections[player_id].turn = not self.active_connections[player_id].turn
-        self.active_connections[enemy_id].turn = not self.active_connections[player_id].turn
-        await self.send_your_turn_message(to_id=enemy_id)
-        logger.debug('Turn, player_id: %s', enemy_id)
+                await self.send_your_turn_message(to_id=player_id)
 
     async def send_enemy_joined_message(self, to_id: UUID) -> None:
         await self.__send_message(to_id, WsRequestType.ENEMY_JOINED)
@@ -167,15 +166,18 @@ class ConnectionManager:
 
     async def send_start_session_message(self, to_id: UUID) -> None:
         await self.__send_message(to_id, WsRequestType.START_SESSION)
+        logger.debug('Session start, player_id: %s', to_id)
 
     async def send_enemy_placement_ready_message(self, to_id: UUID) -> None:
         await self.__send_message(to_id, WsRequestType.ENEMY_PLACEMENT_READY)
 
     async def send_start_game_message(self, to_id: UUID) -> None:
         await self.__send_message(to_id, WsRequestType.START_GAME)
+        logger.debug('Game start, player_id: %s', to_id)
 
     async def send_your_turn_message(self, to_id: UUID) -> None:
         await self.__send_message(to_id, WsRequestType.YOUR_TURN)
+        logger.debug('Turn, player_id: %s', to_id)
 
     async def send_player_entities_message(
             self,

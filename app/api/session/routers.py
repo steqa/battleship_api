@@ -107,7 +107,7 @@ async def websocket_connect_player(websocket: WebSocket, player_id: UUID):
         await redis_services.set_player_data(
             session.id, player_id, placement.board, placement.entities
         )
-        logger.info('Player placement added to redis, session_id: %s, player_id: %s', session.id, player_id)
+        logger.debug('Player placement added to redis, session_id: %s, player_id: %s', session.id, player_id)
         await manager.send_player_entities_message(enemy.id, Entities(entities=placement.entities))
         while True:
             await manager.handle_hit(websocket, session.id, player_id, enemy.id)
